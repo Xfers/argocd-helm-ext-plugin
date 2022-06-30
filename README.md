@@ -44,6 +44,43 @@ data:
         args: ["--include-crds"]
 ```
 
+## Configuration
+
+**Application CRD. configuration example**
+``` yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-app
+  namespace: default
+spec:
+  project: default
+  source:
+    # the repository containing the helm value files
+    repoURL: https://git.example.com/demo.git
+    targetRevision: HEAD
+    # the path of helm value files
+    path: apps/demo-app
+
+    # set argocd-helm-ext-plugin as plugin (the name is specified in argocd-cm config map)
+    plugin:
+      name: argocd-helm-ext-plugin
+      env:
+        # see the description in Plugin environment variables section
+        - name: HELM_REPO_URL
+          value: https://charts.bitnami.com/bitnami
+        - name: HELM_CHART
+          value: nginx
+        - name: HELM_CHART_VERSION
+          value: "12.0.5"
+        - name: HELM_VALUE_FILES
+          value: "values.yaml secrets.yaml"
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+```
+
 ## Plugin arguments
 ```
 Usage of argocd-helm-ext-plugin:
