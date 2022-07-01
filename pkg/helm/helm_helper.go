@@ -2,15 +2,18 @@ package helm
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/Xfers/argocd-helm-ext-plugin/pkg/config"
 	"github.com/Xfers/argocd-helm-ext-plugin/pkg/utils"
+	"github.com/go-redis/redis/v8"
 )
 
 const (
@@ -33,6 +36,8 @@ func getHelmValueType(name string) int {
 
 // Helm CLI helper to pull chart and generate template
 type HelmCli struct {
+	// ARGOCD_APP_NAMESPACE environment variable
+	AppNamespace string
 	// ARGOCD_APP_NAME environment variable
 	AppName string
 	// ARGOCD_APP_REVISION environment variable
@@ -58,6 +63,7 @@ func New(opts *config.Options) (*HelmCli, error) {
 	}
 
 	h := &HelmCli{
+		AppNamespace: os.Getenv("ARGOCD_APP_NAMESPACE"),
 		AppName:      os.Getenv("ARGOCD_APP_NAME"),
 		AppRevision:  os.Getenv("ARGOCD_APP_REVISION"),
 		RepoUrl:      utils.Getenv("HELM_REPO_URL"),
@@ -80,13 +86,16 @@ func New(opts *config.Options) (*HelmCli, error) {
 		return nil, errors.New("HELM_CHART_VERSION is empty")
 	}
 
-	h.loadHelmValues()
+	// initial redis client
+	if _, err := getRedisClient(); err != nil {
+		return nil, err
+	}
+
+	if err := h.loadHelmValues(); err != nil {
+		return nil, err
+	}
 
 	return h, nil
-}
-
-func helmValuesHistoryPath(revision string) string {
-	return fmt.Sprintf("/tmp/values_%s", revision)
 }
 
 func parseHelmValues(helm_values string) map[string]string {
@@ -162,54 +171,82 @@ func (h *HelmCli) GenerateTemplate() error {
 		return errors.New(fmt.Sprintf("pull chart %s error: %s\n", h.Chart, err.Error()))
 	}
 
-	helm_template_file, err := os.OpenFile("/tmp/generated_template.yaml", os.O_RDWR|os.O_CREATE, 0644)
+	manifest_filename := fmt.Sprintf("/tmp/manifest-%s-%s.yaml", h.AppNamespace, h.AppName)
+	manifest_file, err := os.OpenFile(manifest_filename, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		os.Exit(1)
+		return fmt.Errorf("can't open manifest file: %s", manifest_filename)
 	}
-	helm_template_file.Write(out.Bytes())
-	helm_template_file.Close()
+	manifest_file.Write(out.Bytes())
+	manifest_file.Close()
 
 	fmt.Print(out.String())
 
-	if err := h.saveHelmValues(); err != nil {
+	return nil
+}
+
+func (h *HelmCli) helmValueCacheKey() string {
+	return fmt.Sprintf("%s/%s/argocd_helm_ext_plugin/helm_values", h.AppNamespace, h.AppName)
+}
+
+func (h *HelmCli) loadRedisHelmValues() (string, error) {
+	var client *redis.Client
+	var err error
+
+	client, err = getRedisClient()
+	if err != nil {
+		return "", err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var helm_cached_values string
+	helm_cached_values, err = client.Get(ctx, h.helmValueCacheKey()).Result()
+	if err != nil {
+		return "", nil
+	}
+	return helm_cached_values, nil
+}
+
+func (h *HelmCli) saveRedisHelmValues(helm_values string) error {
+	var client *redis.Client
+	var err error
+
+	client, err = getRedisClient()
+	if err != nil {
 		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err = client.Set(ctx, h.helmValueCacheKey(), helm_values, 0).Err(); err != nil {
+		return fmt.Errorf("Set helm values to redis failed: %s\n", helm_values)
 	}
 
 	return nil
 }
 
-func (h *HelmCli) loadHelmValues() {
+func (h *HelmCli) loadHelmValues() error {
 	helm_values := utils.Getenv("HELM_VALUES")
 
 	if len(helm_values) == 0 {
-		value_store_file_path := helmValuesHistoryPath(h.AppRevision)
-		if _, err := os.Stat(value_store_file_path); err == nil {
-			if content, read_err := os.ReadFile(value_store_file_path); read_err == nil {
-				h.Values = parseHelmValues(string(content))
-				log.Printf("load previous helm values from %s\n", value_store_file_path)
-			}
+		if helm_cached_values, err := h.loadRedisHelmValues(); err != nil {
+			return err
+		} else if len(helm_cached_values) > 0 {
+			h.Values = parseHelmValues(helm_cached_values)
+			log.Printf("load previous helm values from redis: %s\n", helm_cached_values)
+		} else {
+			log.Print("helm values in redis is empty\n")
 		}
 	} else {
-		log.Printf("load helm values: %s\n", helm_values)
+		log.Printf("load helm values from env.: %s\n", helm_values)
 		h.Values = parseHelmValues(helm_values)
-	}
-}
-
-func (h *HelmCli) saveHelmValues() error {
-	if len(h.Values) == 0 {
-		return nil
+		if err := h.saveRedisHelmValues(helm_values); err != nil {
+			return err
+		}
+		log.Printf("update helm values to redis: %s\n", helm_values)
 	}
 
-	var values []string
-	for k, v := range h.Values {
-		values = append(values, fmt.Sprintf("%s=%s", k, v))
-	}
-
-	value_store_file_path := helmValuesHistoryPath(h.AppRevision)
-	err := os.WriteFile(value_store_file_path, []byte(strings.Join(values, ";")), 0644)
-	if err != nil {
-		return errors.New(fmt.Sprintf("store helm values to %s fail", value_store_file_path))
-	}
-	log.Printf("save helm values to %s\n", value_store_file_path)
 	return nil
 }

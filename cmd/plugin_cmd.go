@@ -19,10 +19,13 @@ const usage = `Usage of argocd-helm-ext-plugin:
 
 func ArgoCDHelmExtPlugin() {
 	var dev_mode bool
+	var log_env bool
 	var opts config.Options
 
 	flag.BoolVar(&dev_mode, "d", false, "debug mode")
 	flag.BoolVar(&dev_mode, "debug", false, "debug mode")
+	flag.BoolVar(&log_env, "e", false, "log environment variables")
+	flag.BoolVar(&log_env, "env", false, "log environment variables")
 	flag.BoolVar(&opts.IncludeCrds, "c", false, "include custom resource")
 	flag.BoolVar(&opts.IncludeCrds, "include-crds", false, "include custom resource")
 
@@ -32,12 +35,11 @@ func ArgoCDHelmExtPlugin() {
 
 	log.SetFlags(log.Ldate | log.Lmicroseconds)
 
+	app_namespace := os.Getenv("ARGOCD_APP_NAMESPACE")
+	app_name := os.Getenv("ARGOCD_APP_NAME")
+
 	if !dev_mode {
-		log_filename := "/tmp/plugin.log"
-		app_name := os.Getenv("ARGOCD_APP_NAME")
-		if len(app_name) > 0 {
-			log_filename = fmt.Sprintf("/tmp/plugin_%s.log", app_name)
-		}
+		log_filename := fmt.Sprintf("/tmp/plugin-%s-%s.log", app_namespace, app_name)
 		logFile, err := os.OpenFile(log_filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			os.Exit(1)
@@ -45,22 +47,19 @@ func ArgoCDHelmExtPlugin() {
 		log.SetOutput(logFile)
 	}
 
-	if export_content, err := exec.Command("sh", "-c", "export").Output(); err == nil {
-		f, open_err := os.OpenFile("/tmp/export.log", os.O_RDWR|os.O_CREATE, 0644)
-		if open_err == nil {
-			f.Write(export_content)
-			f.Close()
+	if log_env {
+		if env_content, err := exec.Command("sh", "-c", "export").Output(); err == nil {
+			env_content_filename := fmt.Sprintf("/tmp/env-%s-%s.log", app_namespace, app_name)
+			os.WriteFile(env_content_filename, env_content, 0644)
 		}
-	} else {
-		log.Printf("err: %v", err)
 	}
 
 	cli, err := helm.New(&opts)
 	if err != nil {
-		log.Fatalf("create helm cli error: %s\n", err.Error())
+		log.Fatalf("[Error]: %s\n", err.Error())
 	}
 
 	if err := cli.GenerateTemplate(); err != nil {
-		log.Fatalf("Generate %s v%s template fail\n", cli.Chart, cli.ChartVersion)
+		log.Fatalf("[Error] Generate %s v%s template fail\n", cli.Chart, cli.ChartVersion)
 	}
 }
