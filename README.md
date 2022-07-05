@@ -96,7 +96,7 @@ For this case we can set `HELM_VALUES` via Argo CD CLI.
 Example:
 ```bash
 # set image.tag and image.imagePullPolicy
-argocd app set <APP_NAME> --plugin-env HELM_VALUE="image.tag=afeacb7;image.imagePullPolicy=Always"
+argocd app set <APP_NAME> --plugin-env HELM_VALUES="image.tag=afeacb7;image.imagePullPolicy=Always"
 
 # It's a argocd weird issue.,we need to hard refresh the application to invalidate manifest cache
 # to make app. sync invokes plugin (tested on argocd v2.4.3)
