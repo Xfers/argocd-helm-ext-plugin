@@ -126,6 +126,8 @@ func (h *HelmCli) GenerateTemplate() error {
 		"template",
 		h.AppName,
 		h.Chart,
+		"--namespace",
+		h.AppNamespace,
 		"--repo",
 		h.RepoUrl,
 		"--version",
