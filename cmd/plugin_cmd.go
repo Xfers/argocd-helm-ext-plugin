@@ -60,6 +60,6 @@ func ArgoCDHelmExtPlugin() {
 	}
 
 	if err := cli.GenerateTemplate(); err != nil {
-		log.Fatalf("[Error] Generate %s v%s template fail\n", cli.Chart, cli.ChartVersion)
+		log.Fatalf("[Error] Generate %s v%s template fail: %v\n", cli.Chart, cli.ChartVersion, err)
 	}
 }
